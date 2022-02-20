@@ -12,32 +12,40 @@ import torch.utils.data as data
 from torchvision.transforms import CenterCrop, RandomCrop, RandomEqualize
 from matplotlib import transforms
 from PIL import Image
+from utils import dataset_utils
 
 
-# dataset path
-# path = "/media/common/datasets/scene_flow_datasets/FlyingChairs_release/"
-# flyingchairs_data = torchvision.datasets.FlyingChairs(  root=path, 
-#                                                         split='train', 
-#                                                         transforms=None)
-# data_loader = torch.utils.data.DataLoader(flyingchairs_data)
-# print(data_loader)
+def make_dataset(dir, split=None):
+    '''Will search for triplets that go by the pattern 
+    '[name]_img1.ppm  [name]_img2.ppm    [name]_flow.flo' '''
+    print('inside creating dataset...')
+    images = []
+    flow_list = sorted(glob(os.path.join(dir, 'data', '*.flo')))
+    for flow_map in flow_list:
+        flow_map = os.path.basename(flow_map) #00001_flow.flo
+        root_filename = flow_map[:-9] #00001
 
-class StaticRandomCrop(object):
-    def __init__(self, image_size, crop_size):
-        self.th, self.tw = crop_size
-        h, w = image_size
-        self.h1 = random.randint(0, h - self.th)
-        self.w1 = random.randint(0, w - self.tw)
+        img1 = root_filename+'_img1.ppm'
+        img2 = root_filename+'_img2.ppm'
+        if not (os.path.isfile(os.path.join(dir, 'data', img1)) and os.path.isfile(os.path.join(dir, 'data', img2))):
+            print('here')
+            continue
 
-    def __call__(self, img):
-        return img[self.h1:(self.h1+self.th), self.w1:(self.w1+self.tw),:]
+        images.append([[img1,img2],flow_map])
+    print('len: ', len(images))
+    #splits the data in test-train samples
+    return dataset_utils.split2list(images, split, default_split=0.97)
 
-class StaticCenterCrop(object):
-    def __init__(self, image_size, crop_size):
-        self.th, self.tw = crop_size
-        self.h, self.w = image_size
-    def __call__(self, img):
-        return img[(self.h-self.th)//2:(self.h+self.th)//2, (self.w-self.tw)//2:(self.w+self.tw)//2,:]
+
+def flying_chairs(root, transform=None, target_transform=None,
+                  co_transform=None, split=None):
+    print('inside flying chairs..')
+    train_list, test_list = make_dataset(root, split)
+    train_dataset = dataset_utils.ListDataset(root, train_list, transform, target_transform, co_transform)
+    test_dataset = dataset_utils.ListDataset(root, test_list, transform, target_transform)
+
+    return train_dataset, test_dataset
+
 
 class HistogramEqualizer(object):
 
@@ -115,8 +123,6 @@ class FlyingChairs(data.Dataset):
             rimg.save('randomEqualize.png')
 
 
-            
-
     def __getitem__(self, index):
         index = index % self.size
 
@@ -127,15 +133,15 @@ class FlyingChairs(data.Dataset):
         images = [img1, img2]
         image_size = img1.shape[:2]
         
-        # if self.is_cropped:
-        #     # cropper = StaticRandomCrop(image_size, self.crop_size)
-        #     cropper = RandomCrop(image_size)
-        # else:
-        #     # cropper = StaticCenterCrop(image_size, self.render_size)
-        #     cropper = CenterCrop(image_size)
+        if self.is_cropped:
+            # cropper = StaticRandomCrop(image_size, self.crop_size)
+            cropper = RandomCrop(image_size)
+        else:
+            # cropper = StaticCenterCrop(image_size, self.render_size)
+            cropper = CenterCrop(image_size)
 
-        # images = list(map(cropper, images))
-        # flow = cropper(flow)
+        images = list(map(cropper, images))
+        flow = cropper(flow)
 
         images = np.array(images).transpose(3,0,1,2)
         flow = flow.transpose(2,0,1)
@@ -147,6 +153,3 @@ class FlyingChairs(data.Dataset):
 
     def __len__(self):
         return self.size * self.replicates
-
-dataset = FlyingChairs()
-dataset[0]

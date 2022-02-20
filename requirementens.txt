@@ -7,3 +7,4 @@ scipy
 imageio
 scikit-image
 plotly
+tensorboard
