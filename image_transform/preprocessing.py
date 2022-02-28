@@ -1,5 +1,6 @@
 from torchvision.transforms import CenterCrop, RandomCrop, RandomEqualize
 from PIL import Image
+import numpy as np
 
 # 1. (Preprocessing) a histogram equalization -- I think this is the Pytorch function, 
 # it should take in a PIL Image
@@ -16,22 +17,54 @@ output[channel] = (input[channel] - mean[channel]) / std[channel]
 
 - Normalization helps get data within a range and reduces the skewness which helps learn faster and better. 
 - Normalization can also tackle the diminishing and exploding gradients problems.
-
-
 '''
 
-class Process():
-    def __init__(self, image):
-        self.image = image
+class HistogramEqualization():
+    def __init__(self):
+        return
+        # self.image_path = image_path
 
-    def histogram_equalization(self):
-        self.image = Image.open(self.image)
+    def __call__(self, image_path):
+        self.image = Image.open(image_path)
         # self.image = RandomEqualize(p=1).forward(self.image)
         # self.image.save('randomEqualize.png')
-        return RandomEqualize(p=1).forward(self.image)
+        return RandomEqualize(p=1).forward(self.image) #returns PIL image
 
-    def preprocessing(self):
-        pass
+class ReadFromFile():
+    def __init__(self):
+        return
+        # self.image_path = image_path
+
+    def __call__(self, image_path):
+        """ Read .flo file in Middlebury format"""
+        # Code adapted from:
+        # http://stackoverflow.com/questions/28013200/reading-middlebury-flow-files-with-python-bytes-array-numpy
+
+        # WARNING: this will work on little-endian architectures (eg Intel x86) only!
+        with open(image_path, 'rb') as f:
+            magic = np.fromfile(f, np.float32, count=1)
+            if 202021.25 != magic:
+                print('Magic number incorrect. Invalid .flo file')
+                return None
+            else:
+                w = np.fromfile(f, np.int32, count=1)
+                h = np.fromfile(f, np.int32, count=1)
+                # print 'Reading %d x %d flo file\n' % (w, h)
+                data = np.fromfile(f, np.float32, count=2*int(w)*int(h))
+                # Reshape data into 3D array (columns, rows, bands)
+                # The reshape here is for visualization, the original code is (w,h,2)
+                return np.resize(data, (int(h), int(w), 2))
+
+class CustomRange():
+    def __call__(self, array):
+        try:
+            if array is not None:
+                return array - 0.5
+            else:
+                return None
+        except TypeError:
+            return np.array(array) - 0.5
+
 
 if __name__ == '__main__':
-    Process()
+    HistogramEqualization()

@@ -10,16 +10,20 @@ import torch.optim
 import torch.utils.data
 import torchvision.transforms as transforms
 from data_loader import *
-# import flow_transforms
+from image_transform import preprocessing
 import models
+import torchvision.transforms as transforms
 # import datasets
-# from multiscaleloss import multiscaleEPE, realEPE
+from loss.multiscale import multiscaleEPE, realEPE
 import datetime
 from torch.utils.tensorboard import SummaryWriter
-# from util import flow2rgb, AverageMeter, save_checkpoint
+from utils.common import flow2rgb, AverageMeter, save_checkpoint
 
 
 DATASET_PATH = '/media/common/datasets/scene_flow_datasets/FlyingChairs_release/'
+model_names = sorted(name for name in models.__dict__
+                     if name.islower() and not name.startswith("__"))
+print(model_names)
 
 parser = argparse.ArgumentParser(description='PyTorch CPN Training on FlyingChairs dataset',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -38,6 +42,11 @@ parser.add_argument('--lr', '--learning_rate', default=0.001, type=float, metava
                     help='initial learning rate')
 
 parser.add_argument('--seed_split', default=42)
+parser.add_argument('--div_flow', default=20.0, type=float)
+parser.add_argument('--arch', '-a', metavar='ARCH', default='flownets',
+                    choices=model_names,
+                    help='model architecture, overwritten if pretrained is specified: ' +
+                    ' | '.join(model_names))
 
 
 ##to use or not
@@ -64,7 +73,8 @@ parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
 parser.add_argument('--epoch-size', default=1000, type=int, metavar='N',
                     help='manual epoch size (will match dataset size if set to 0)')
 
-
+parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
+                    help='momentum for sgd, alpha parameter for adam')
 parser.add_argument('--alpha', default=0.9, type=float, metavar='M',
                     help='momentum for sgd, alpha parameter for adam')
 parser.add_argument('--beta', default=0.999, type=float, metavar='M',
@@ -84,6 +94,7 @@ parser.add_argument('--print-freq', '-p', default=10, type=int,
 parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                     help='evaluate model on validation set')
 
+parser.add_argument('--milestones', default=[100,150,200], metavar='N', nargs='*', help='epochs at which learning rate is divided by 2')
 #for pretrained model
 parser.add_argument('--pretrained', dest='pretrained', default=None,
                     help='path to pre-trained model')
@@ -119,49 +130,50 @@ def main():
 
     train_writer = SummaryWriter(os.path.join(model_path, 'train'))
     test_writer = SummaryWriter(os.path.join(model_path, 'test'))
-    output_writers = SummaryWriter(os.path.join(model_path,'test'))
+    output_writers = []
 
-    # Data loading code
-    # input_transform = transforms.Compose([
-    #     flow_transforms.ArrayToTensor(),
-    #     transforms.Normalize(mean=[0,0,0], std=[255,255,255]),
-    #     transforms.Normalize(mean=[0.45,0.432,0.411], std=[1,1,1])
-    # ])
-    # target_transform = transforms.Compose([
-    #     flow_transforms.ArrayToTensor(),
-    #     transforms.Normalize(mean=[0,0],std=[args.div_flow,args.div_flow])
-    # ])
+    # Data loading code and preprocessing
+    '''
+    img path - PIL img - tensor - 
+    1. ArrayToTensor: Converts a numpy.ndarray (H x W x C) to a torch.FloatTensor of shape (C x H x W)
+    2. Hist. Eq.: Tensor -> Tensor
+    3. Normalize
+    4. Subtract -0.5
+    '''
+    input_image_transform = transforms.Compose([
+        preprocessing.HistogramEqualization(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.0,0.0,0.0], std=[1.0,1.0,1.0]),
+        preprocessing.CustomRange()
+    ])
 
-    # if args.sparse:
-    #     co_transform = flow_transforms.Compose([
-    #         flow_transforms.RandomCrop((320,448)),
-    #         flow_transforms.RandomVerticalFlip(),
-    #         flow_transforms.RandomHorizontalFlip()
-    #     ])
-    # else:
-    #     co_transform = flow_transforms.Compose([
-    #         flow_transforms.RandomTranslate(10),
-    #         flow_transforms.RandomRotate(10,5),
-    #         flow_transforms.RandomCrop((320,448)),
-    #         flow_transforms.RandomVerticalFlip(),
-    #         flow_transforms.RandomHorizontalFlip()
-    #     ])
+    #for more: https://pytorch.org/vision/master/transforms.html
+    co_transform = transforms.Compose([
+        transforms.RandomCrop((320,448)),
+        transforms.RandomAffine(degrees=(5,10), translate=(0.2,0.2)),
+        transforms.RandomVerticalFlip(),
+        transforms.RandomHorizontalFlip()
+    ])
+
+    target_transform = transforms.Compose([
+        preprocessing.ReadFromFile(),
+        transforms.ToTensor(),
+        # transforms.ArrayToTensor(),
+        transforms.Normalize(mean=[0,0],std=[args.div_flow,args.div_flow])
+    ])
 
     print("=> fetching img pairs in '{}'".format(args.data))
-    train_set, test_set = flying_chairs(root=args.data, transform=None, target_transform=None,
-                  co_transform=None, split=None)
-
-    # train_set, test_set = datasets.__dict__[args.dataset](
-    #     args.data,
-    #     transform=input_transform,
-    #     target_transform=target_transform,
-    #     co_transform=co_transform,
-    #     split=args.split_file if args.split_file else args.split_value
-    # )
+    train_set, test_set = flying_chairs(root=args.data, 
+                                        transform=input_image_transform, 
+                                        target_transform=target_transform,
+                                        co_transform=co_transform, split=None)
 
     print('{} samples found, {} train samples and {} test samples '.format(len(test_set)+len(train_set),
                                                                            len(train_set),
                                                                            len(test_set)))
+
+    
+    
     train_loader = torch.utils.data.DataLoader(
         train_set, batch_size=args.batch_size,
         num_workers=args.workers, pin_memory=True, shuffle=True)
@@ -178,16 +190,16 @@ def main():
         network_data = None
         print("=> creating model '{}'".format(args.arch))
 
-    model = models.__dict__[args.arch](network_data).to(device)
+    model = models.cpn.CPN(network_data).to(device)
 
     assert(args.solver in ['adam', 'sgd'])
     print('=> setting {} solver'.format(args.solver))
     param_groups = [{'params': model.bias_parameters(), 'weight_decay': args.bias_decay},
                     {'params': model.weight_parameters(), 'weight_decay': args.weight_decay}]
 
-    if device.type == "cuda":
-        model = torch.nn.DataParallel(model).cuda()
-        cudnn.benchmark = True
+    # if device.type == "cuda":
+    #     model = torch.nn.DataParallel(model).cuda()
+    #     cudnn.benchmark = True
 
     if args.solver == 'adam':
         optimizer = torch.optim.Adam(param_groups, args.lr,
@@ -226,7 +238,7 @@ def main():
             'state_dict': model.module.state_dict(),
             'best_EPE': best_EPE,
             'div_flow': args.div_flow
-        }, is_best, save_path)
+        }, is_best, model_path)
 
 
 def train(train_loader, model, optimizer, epoch, train_writer):
@@ -250,7 +262,7 @@ def train(train_loader, model, optimizer, epoch, train_writer):
         input = torch.cat(input,1).to(device)
 
         # compute output
-        output = model(input)
+        output = model((input, target))
         if args.sparse:
             # Since Target pooling is not very precise when sparse,
             # take the highest resolution prediction and upsample it instead of downsampling target
@@ -299,7 +311,7 @@ def validate(val_loader, model, epoch, output_writers):
         input = torch.cat(input,1).to(device)
 
         # compute output
-        output = model(input)
+        output = model((input, target))
         flow2_EPE = args.div_flow*realEPE(output, target, sparse=args.sparse)
         # record EPE
         flow2_EPEs.update(flow2_EPE.item(), target.size(0))
@@ -307,7 +319,7 @@ def validate(val_loader, model, epoch, output_writers):
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-
+        # print('output writers', output_writers)
         if i < len(output_writers):  # log first output of first batches
             if epoch == args.start_epoch:
                 mean_values = torch.tensor([0.45,0.432,0.411], dtype=input.dtype).view(3,1,1)
@@ -323,7 +335,6 @@ def validate(val_loader, model, epoch, output_writers):
     print(' * EPE {:.3f}'.format(flow2_EPEs.avg))
 
     return flow2_EPEs.avg
-
 
 if __name__ == '__main__':
     main()

@@ -1,10 +1,8 @@
 import numpy as np
 import torchvision
 from skimage import io, exposure
-import pdb
 import os
-import random
-from glob import glob   # matches path names with same pattern in the folder
+from glob import glob
 import matplotlib.pyplot as plt
 from utils.input_utils import read_gen
 import torch
@@ -22,62 +20,31 @@ def make_dataset(dir, split=None):
     images = []
     flow_list = sorted(glob(os.path.join(dir, 'data', '*.flo')))
     for flow_map in flow_list:
+        flow_map_full = flow_map
         flow_map = os.path.basename(flow_map) #00001_flow.flo
         root_filename = flow_map[:-9] #00001
 
-        img1 = root_filename+'_img1.ppm'
-        img2 = root_filename+'_img2.ppm'
+        img1 = os.path.join(dir, 'data', root_filename+'_img1.ppm')
+        img2 = os.path.join(dir, 'data', root_filename+'_img2.ppm')
         if not (os.path.isfile(os.path.join(dir, 'data', img1)) and os.path.isfile(os.path.join(dir, 'data', img2))):
             print('here')
             continue
 
-        images.append([[img1,img2],flow_map])
+        images.append([[img1,img2],flow_map_full])
     print('len: ', len(images))
     #splits the data in test-train samples
     return dataset_utils.split2list(images, split, default_split=0.97)
 
 
-def flying_chairs(root, transform=None, target_transform=None,
-                  co_transform=None, split=None):
+def flying_chairs(root, transform, target_transform, co_transform, split=None):
     print('inside flying chairs..')
     train_list, test_list = make_dataset(root, split)
-    train_dataset = dataset_utils.ListDataset(root, train_list, transform, target_transform, co_transform)
-    test_dataset = dataset_utils.ListDataset(root, test_list, transform, target_transform)
-
+    train_dataset = dataset_utils.ListDataset(train_list, transform, co_transform, target_transform)
+    test_dataset = dataset_utils.ListDataset(test_list, transform, co_transform=None, target_transform=target_transform)
+    print("train-test shape: ", len(train_dataset), len(test_dataset))
     return train_dataset, test_dataset
 
-
-class HistogramEqualizer(object):
-
-    # img_obj = HistogramEqualizer(image)
-    # img_obj()
-
-    def __init__(self, img_ip):
-        self.img_ip = img_ip.astype(np.float32)
-
-    def __call__(self):
-        channels = 3
-        for i in range(channels):
-            pixels_per_channel = self.img_ip[:,:,i]
-
-            # created cummulative frequency of pixels against the instensity value
-            cdf, bin_centers = exposure.cumulative_distribution(pixels_per_channel, nbins=256)
-
-            img_interpolated = np.interp(pixels_per_channel.flat, bin_centers, cdf)
-            
-            pixels_per_channel = img_interpolated.reshape(pixels_per_channel.shape)
-            
-            # equalize the image pixels
-            xmax = np.amax(pixels_per_channel)
-            xmin = np.amin(pixels_per_channel)
-            dx = xmax - xmin
-            img_eq = (pixels_per_channel - xmin)/dx
-            
-            self.img_ip[:,:,i] = img_eq
-
-        return self.img_ip
-
-
+########################################################
 class FlyingChairs(data.Dataset):
     def __init__(self, root="/media/common/datasets/scene_flow_datasets/FlyingChairs_release/"):
         # self.args = args
